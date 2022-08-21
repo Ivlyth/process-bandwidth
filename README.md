@@ -25,14 +25,14 @@ directory of the project
 - GetConnections.ConnectionInfo.LocalPort=9091 or Name=java
 
 ##### filter connections (you should check the Connes and uncheck the Process)
-ConnectionInfo.LocalPort = 2181 or ConnectionInfo.LocalPort = 9091
+- ConnectionInfo.LocalPort = 2181 or ConnectionInfo.LocalPort = 9091
 
 ##### filter both (you should check the both)
 > Note: filter processes and connections at the same time it's only meaningful that you filter processes based on connection
 and you want see connections only satisfies the filter for process. so we just use `or` to concat two (or more) filter,
 but we known that one is for process and another is for connection. 
 
-GetConnections.ConnectionInfo.LocalPort = 2181 or ConnectionInfo.LocalPort = 2181
+- GetConnections.ConnectionInfo.LocalPort = 2181 or ConnectionInfo.LocalPort = 2181
 
 > filter function implement based on [uni-filter](https://github.com/Ivlyth/uni-filter), see more document [here](https://github.com/Ivlyth/uni-filter/blob/main/README.md)
 

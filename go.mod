@@ -11,7 +11,7 @@ require (
 )
 
 require (
-	github.com/Ivlyth/uni-filter v0.1.0
+	github.com/Ivlyth/uni-filter v0.1.1
 	github.com/gdamore/tcell/v2 v2.5.2
 	github.com/gin-gonic/gin v1.8.1
 	github.com/gogo/protobuf v1.1.1
@@ -71,5 +71,3 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
-
-replace github.com/Ivlyth/uni-filter => /Users/myth/workspace/tophant/uni-filter

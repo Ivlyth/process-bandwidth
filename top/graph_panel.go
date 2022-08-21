@@ -38,9 +38,9 @@ func refreshGraphPanel() {
 		_, _, width, height := graphView.GetInnerRect()
 		height -= 2
 		width -= 2
-		if height <= 8 {
+		if height <= 4 {
 			height = 0
-			_, _ = graphView.Write([]byte("not enough height to draw the graph (at least 8)"))
+			_, _ = graphView.Write([]byte("not enough height to draw the graph (at least 4)"))
 		} else {
 			var in, out []float64
 			for _, h := range histories {
