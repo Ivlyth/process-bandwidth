@@ -16,11 +16,11 @@ var pages *tview.Pages
 
 func StartTop() error {
 
-	pTable = initProcessTable()
+	initProcessTable()
 
-	cTable = initConnectionTable()
+	initConnectionTable()
 
-	graphView = initGraphView()
+	initGraphView()
 
 	connectionPanel = tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -33,7 +33,7 @@ func StartTop() error {
 
 	infoView = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 
-	filterPanel := initFilterPanel()
+	initFilterPanel()
 
 	mainPanel := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -56,6 +56,8 @@ func StartTop() error {
 		if event.Key() == tcell.KeyTAB {
 			if pTable.HasFocus() {
 				app.SetFocus(connectionPanel).SetFocus(cTable)
+			} else if cTable.HasFocus() {
+				app.SetFocus(filterPanel).SetFocus(filterInput)
 			} else {
 				app.SetFocus(processPanel).SetFocus(pTable)
 			}

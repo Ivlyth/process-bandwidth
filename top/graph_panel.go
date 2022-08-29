@@ -11,12 +11,10 @@ import (
 var graphView *tview.TextView
 var histories []engine.RWSnapshot
 
-func initGraphView() *tview.TextView {
-	v := tview.NewTextView().SetDynamicColors(true).SetWrap(false)
-	v.SetBorder(true).SetTitle(" bandwidth graph ")
-	_, _ = v.Write([]byte("waiting for select process or connection"))
-
-	return v
+func initGraphView() {
+	graphView = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
+	graphView.SetBorder(true).SetTitle(" bandwidth graph ")
+	_, _ = graphView.Write([]byte("waiting for select process or connection"))
 }
 
 func refreshGraphPanel() {
