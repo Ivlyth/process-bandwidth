@@ -12,12 +12,15 @@ var filterForProcess = true
 var filterForConnections = false
 var filterErr error
 
-func initFilterPanel() *tview.Flex {
-	input := tview.NewInputField()
+var filterPanel *tview.Flex
+var filterInput *tview.InputField
+
+func initFilterPanel() {
+	filterInput = tview.NewInputField()
 	filterExpr, filterErr = uni_filter.Parse(filterStr)
-	input.SetLabel("Filter: ").SetText(filterStr /*default filter*/).SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	filterInput.SetLabel("Filter: ").SetText(filterStr /*default filter*/).SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEnter {
-			filterStr = input.GetText()
+			filterStr = filterInput.GetText()
 			logger.Debugf("enter key pressed, filter text is: %s\n", filterStr)
 			filterExpr, filterErr = uni_filter.Parse(filterStr)
 			if filterErr != nil {
@@ -37,13 +40,11 @@ func initFilterPanel() *tview.Flex {
 	//applyButton := tview.NewButton("<Apply>")
 	//recentButton := tview.NewButton("<Recent>")
 
-	optionsFlex := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(input, 0, 40, false).
+	filterPanel = tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(filterInput, 0, 40, false).
 		AddItem(nil, 0, 1, false).
 		AddItem(filterProcess, 0, 5, false).
 		AddItem(nil, 0, 1, false).
 		AddItem(filterConnections, 0, 5, false)
-	optionsFlex.SetBorder(true)
-
-	return optionsFlex
+	filterPanel.SetBorder(true)
 }

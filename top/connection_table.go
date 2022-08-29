@@ -39,13 +39,13 @@ func initConnectionTableHeader() {
 	cTable.SetFixed(1, 1)
 }
 
-func initConnectionTable() *tview.Table {
-	table := tview.NewTable().
+func initConnectionTable() {
+	cTable = tview.NewTable().
 		SetBorders(false).SetSelectable(true, false).SetSeparator(tview.Borders.Vertical)
-	table.SetBorder(true).SetTitle(" Connection's Bandwidth ")
-	table.SetEvaluateAllRows(true)
+	cTable.SetBorder(true).SetTitle(" Connection's Bandwidth ")
+	cTable.SetEvaluateAllRows(true)
 
-	table.SetSelectionChangedFunc(func(row, column int) {
+	cTable.SetSelectionChangedFunc(func(row, column int) {
 		lastUserScrollCTableAt = time.Now()
 
 		if row == 0 {
@@ -78,8 +78,8 @@ func initConnectionTable() *tview.Table {
 	})
 
 	//  set table header
-	table.SetSelectedFunc(func(row int, column int) {
-		v, ok := table.GetCell(row, 0).GetReference().(*engine.Connection)
+	cTable.SetSelectedFunc(func(row int, column int) {
+		v, ok := cTable.GetCell(row, 0).GetReference().(*engine.Connection)
 		if ok {
 			logger.Debugf("select connection inside cTable at row:%d, col:%d, connection fd is %d\n", row, column, v.FD)
 			selectedConnection = v
@@ -91,8 +91,6 @@ func initConnectionTable() *tview.Table {
 		refreshConnectionTable()
 		refreshGraphPanel()
 	})
-
-	return table
 }
 
 func refreshConnectionTable() {

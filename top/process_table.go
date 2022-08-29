@@ -40,15 +40,15 @@ func initProcessTableHeader() {
 	pTable.SetFixed(1, 1)
 }
 
-func initProcessTable() *tview.Table {
-	table := tview.NewTable().
+func initProcessTable() {
+	pTable = tview.NewTable().
 		SetBorders(false).SetSelectable(true, false).SetSeparator(tview.Borders.Vertical)
-	table.SetBorder(true).SetTitle(" Process's Bandwidth ")
-	table.SetEvaluateAllRows(true)
+	pTable.SetBorder(true).SetTitle(" Process's Bandwidth ")
+	pTable.SetEvaluateAllRows(true)
 
-	table.SetSelectionChangedFunc(func(row, column int) {
+	pTable.SetSelectionChangedFunc(func(row, column int) {
 		lastUserScrollPTableAt = time.Now()
-		v, ok := table.GetCell(row, 0).GetReference().(*engine.Process)
+		v, ok := pTable.GetCell(row, 0).GetReference().(*engine.Process)
 		if ok {
 			infoView.Clear()
 			_, _ = infoView.Write([]byte(v.Cmdline))
@@ -86,9 +86,9 @@ func initProcessTable() *tview.Table {
 		}
 	})
 
-	table.SetSelectedFunc(func(row int, column int) {
+	pTable.SetSelectedFunc(func(row int, column int) {
 		logger.Debugf("ptable selected row:%d, column:%d\n", row, column)
-		v, ok := table.GetCell(row, 0).GetReference().(*engine.Process)
+		v, ok := pTable.GetCell(row, 0).GetReference().(*engine.Process)
 		infoView.Clear()
 		if ok {
 			selectedProcess = v
@@ -107,7 +107,6 @@ func initProcessTable() *tview.Table {
 		refreshConnectionTable()
 		refreshGraphPanel()
 	})
-	return table
 }
 
 func refreshProcessTable() {

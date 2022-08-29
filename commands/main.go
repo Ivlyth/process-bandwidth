@@ -37,8 +37,8 @@ var (
 				fmt.Printf("error when get kernel version info: %s\n", err)
 				os.Exit(1)
 			}
-			if kv < kernel.VersionCode(4, 18, 0) {
-				fmt.Printf("Linux Kernel version %v is not supported. Need > 4.18 .\n", kv)
+			if kv < kernel.VersionCode(3, 10, 0) {
+				fmt.Printf("Linux Kernel version %v is not supported. Need >= 3.10 .\n", kv)
 				os.Exit(1)
 			}
 
