@@ -17,6 +17,9 @@ import (
 	"github.com/Ivlyth/process-bandwidth/internal/store"
 )
 
+// debugEvery controls how often periodic debug counters are logged (every N events).
+const debugEvery = 1000
+
 // Collector is the main collection engine.
 // Create with New(), call Start() to begin collection, Stop() to clean up.
 type Collector struct {
@@ -37,21 +40,31 @@ type Collector struct {
 
 	// dropped event count (perf ring buffer overflows)
 	dropped atomic.Uint64
+
+	// debug counters (only used when cfg.Debug == true)
+	dbgEventsRead   atomic.Uint64 // total raw bytes received from perf reader
+	dbgEventsIO     atomic.Uint64 // IO events decoded and dispatched
+	dbgEventsFD     atomic.Uint64 // FD events decoded
+	dbgEventsProc   atomic.Uint64 // Proc events decoded
+	dbgClassUnknown atomic.Uint64 // IO events with FDClass=UNKNOWN
+	dbgClassResolved atomic.Uint64 // UNKNOWN FDs resolved via /proc
 }
 
 // New creates a Collector. It loads the eBPF program but does not start
 // reading events yet. Call Start() to begin.
 func New(cfg *config.Config, logger *slog.Logger) (*Collector, error) {
-	objs, err := bpfpkg.Load()
+	objs, err := bpfpkg.Load(logger)
 	if err != nil {
 		return nil, err
 	}
+	logger.Debug("eBPF loaded", "tracepoints_attached", objs.LinkCount())
 
 	reader, err := bpfpkg.NewReader(objs)
 	if err != nil {
 		objs.Close()
 		return nil, err
 	}
+	logger.Debug("perf event reader created")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -109,15 +122,20 @@ func (c *Collector) readLoop() {
 		c.wg.Done()
 	}()
 
+	c.logger.Debug("readLoop started – waiting for eBPF events")
+	firstEvent := true
+
 	for {
 		raw, err := c.reader.Read()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				c.logger.Debug("readLoop: reader closed (EOF), exiting")
 				return // reader closed, normal shutdown
 			}
 			var dropped *bpfpkg.DroppedSamplesError
 			if errors.As(err, &dropped) {
 				c.store.AddDropped(dropped.Count)
+				c.logger.Debug("readLoop: perf buffer overflow", "dropped", dropped.Count)
 				continue
 			}
 			// Other errors: log and continue unless context is done.
@@ -125,9 +143,24 @@ func (c *Collector) readLoop() {
 			case <-c.ctx.Done():
 				return
 			default:
-				c.logger.Warn("event reader error", "err", err)
+				c.logger.Warn("readLoop: event reader error", "err", err)
 				continue
 			}
+		}
+
+		if firstEvent {
+			firstEvent = false
+			c.logger.Debug("readLoop: first eBPF event received", "len", len(raw))
+		}
+
+		n := c.dbgEventsRead.Add(1)
+		if c.cfg.Debug && n%debugEvery == 0 {
+			c.logger.Debug("readLoop stats",
+				"events_read", n,
+				"channel_len", len(c.rawCh),
+				"channel_cap", cap(c.rawCh),
+				"dropped_total", c.store.Dropped(),
+			)
 		}
 
 		// Non-blocking send: if the channel is full, drop and count.
@@ -135,6 +168,7 @@ func (c *Collector) readLoop() {
 		case c.rawCh <- raw:
 		default:
 			c.store.AddDropped(1)
+			c.logger.Debug("readLoop: rawCh full, dropped event")
 		}
 	}
 }
@@ -145,14 +179,18 @@ func (c *Collector) workerLoop() {
 	for raw := range c.rawCh {
 		ev, err := DecodeEvent(raw)
 		if err != nil {
+			c.logger.Debug("workerLoop: decode error", "err", err, "raw_len", len(raw))
 			continue
 		}
 		switch e := ev.(type) {
 		case *IOEvent:
+			c.dbgEventsIO.Add(1)
 			c.handleIO(e)
 		case *FDEvent:
+			c.dbgEventsFD.Add(1)
 			c.handleFD(e)
 		case *ProcEvent:
+			c.dbgEventsProc.Add(1)
 			c.handleProc(e)
 		}
 	}
@@ -197,6 +235,7 @@ func (c *Collector) handleIO(e *IOEvent) {
 	effectiveClass := model.FDClass(e.FDClass)
 
 	if effectiveClass == model.FDClassUnknown {
+		c.dbgClassUnknown.Add(1)
 		if conn.Info() != nil {
 			// Already resolved on a previous event – it's a socket.
 			effectiveClass = model.FDClassSocket
@@ -205,6 +244,15 @@ func (c *Collector) handleIO(e *IOEvent) {
 			if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
 				conn.SetInfo(info)
 				effectiveClass = model.FDClassSocket
+				c.dbgClassResolved.Add(1)
+				c.logger.Debug("handleIO: unknown FD resolved via /proc",
+					"pid", e.PID, "fd", e.FD,
+					"proto", info.Protocol, "local", info.Local, "remote", info.Remote,
+				)
+			} else {
+				c.logger.Debug("handleIO: FDClass unknown, /proc resolution failed",
+					"pid", e.PID, "fd", e.FD, "bytes", e.Bytes,
+				)
 			}
 		}
 	} else if effectiveClass == model.FDClassSocket && conn.Info() == nil {
@@ -267,12 +315,28 @@ func (c *Collector) snapshotLoop() {
 	defer c.wg.Done()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var ticks uint64
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
 		case now := <-ticker.C:
 			c.takeSnapshot(now)
+			ticks++
+			// Log a debug summary every 10 seconds.
+			if c.cfg.Debug && ticks%10 == 0 {
+				c.logger.Debug("snapshotLoop stats",
+					"tick", ticks,
+					"processes", c.store.ProcessCount(),
+					"events_read", c.dbgEventsRead.Load(),
+					"events_io", c.dbgEventsIO.Load(),
+					"events_fd", c.dbgEventsFD.Load(),
+					"events_proc", c.dbgEventsProc.Load(),
+					"class_unknown", c.dbgClassUnknown.Load(),
+					"class_resolved", c.dbgClassResolved.Load(),
+					"dropped", c.store.Dropped(),
+				)
+			}
 		}
 	}
 }

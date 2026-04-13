@@ -6,6 +6,7 @@ package bpf
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -43,20 +44,30 @@ func (o *Objects) Close() {
 	}
 }
 
+// LinkCount returns how many tracepoints were successfully attached.
+func (o *Objects) LinkCount() int { return len(o.links) }
+
 // Load compiles and attaches the pbmon eBPF program.
 // Uses PERF_EVENT_ARRAY for event delivery (kernel >= 4.9).
-func Load() (*Objects, error) {
+// logger may be nil; when non-nil each tracepoint attach result is logged at DEBUG level.
+func Load(logger *slog.Logger) (*Objects, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	// Bump the locked memory limit – needed on kernels without BPF_PROG_TYPE_CGROUP_SKB
 	// and on older kernels where the default is very small.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock rlimit: %w", err)
 	}
+	logger.Debug("eBPF memlock rlimit removed")
 
 	// Parse the embedded ELF
 	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(PbmonELF))
 	if err != nil {
 		return nil, fmt.Errorf("load collection spec: %w", err)
 	}
+	logger.Debug("eBPF ELF parsed", "programs", len(spec.Programs), "maps", len(spec.Maps))
 
 	// Load into kernel
 	coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
@@ -67,6 +78,7 @@ func Load() (*Objects, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create BPF collection: %w", err)
 	}
+	logger.Debug("eBPF collection loaded into kernel")
 
 	objs := &Objects{}
 
@@ -92,6 +104,7 @@ func Load() (*Objects, error) {
 		coll.Close()
 		return nil, fmt.Errorf("map events not found in ELF")
 	}
+	logger.Debug("eBPF maps extracted")
 
 	// Attach all tracepoints
 	attachments := []struct {
@@ -164,20 +177,41 @@ func Load() (*Objects, error) {
 		{"sched", "sched_process_fork", "tp_sched_fork"},
 	}
 
+	attached, skippedNoProg, skippedErr := 0, 0, 0
 	for _, a := range attachments {
 		prog, ok := coll.Programs[a.prog]
 		if !ok {
-			// Skip programs that weren't compiled (e.g. pwritev2 on old kernels)
+			logger.Debug("tracepoint skipped: program not in ELF",
+				"group", a.group, "name", a.name, "prog", a.prog)
+			skippedNoProg++
 			continue
 		}
 		l, err := link.Tracepoint(a.group, a.name, prog, nil)
 		if err != nil {
-			// Best-effort: skip tracepoints that don't exist on this kernel version
+			logger.Debug("tracepoint attach failed",
+				"group", a.group, "name", a.name, "err", err)
+			skippedErr++
 			continue
 		}
+		logger.Debug("tracepoint attached", "group", a.group, "name", a.name)
 		objs.links = append(objs.links, l)
+		attached++
+	}
+
+	logger.Info("eBPF tracepoints attached",
+		"attached", attached,
+		"skipped_no_prog", skippedNoProg,
+		"skipped_error", skippedErr,
+		"total", len(attachments))
+
+	if attached == 0 {
+		objs.Close()
+		return nil, fmt.Errorf("no tracepoints attached (%d had no prog, %d attach errors) – check kernel tracepoint support",
+			skippedNoProg, skippedErr)
 	}
 
 	return objs, nil
 }
+
+
 
