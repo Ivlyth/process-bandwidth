@@ -1,6 +1,6 @@
 // Package bpf provides the eBPF loader for pbmon.
 // It loads pbmon_bpf.o (compiled from pbmon.c), attaches all tracepoints,
-// and exposes a unified EventReader interface over ring-buffer or perf-event-array.
+// and exposes a unified EventReader interface over perf-event-array.
 package bpf
 
 import (
@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 )
@@ -17,13 +16,12 @@ import (
 // Call Close() to detach tracepoints and free kernel resources.
 type Objects struct {
 	// Maps
-	PfidClassMap   *ebpf.Map // {tgid,fd} -> fd_class
-	TidFdMap       *ebpf.Map // tid -> fd  (temp)
-	TidPipeptrMap  *ebpf.Map // tid -> pipe ptr (temp)
-	Events         *ebpf.Map // perf event array or ring buffer
+	PfidClassMap  *ebpf.Map // {tgid,fd} -> fd_class
+	TidFdMap      *ebpf.Map // tid -> fd  (temp)
+	TidPipeptrMap *ebpf.Map // tid -> pipe ptr (temp)
+	Events        *ebpf.Map // perf event array
 
-	links      []link.Link
-	useRingBuf bool
+	links []link.Link
 }
 
 // Close detaches all tracepoints and closes all eBPF resources.
@@ -45,13 +43,8 @@ func (o *Objects) Close() {
 	}
 }
 
-// UseRingBuf reports whether the ring buffer was selected (kernel >= 5.8).
-func (o *Objects) UseRingBuf() bool { return o.useRingBuf }
-
 // Load compiles and attaches the pbmon eBPF program.
-// It detects kernel features at runtime:
-//   - Ring buffer (kernel >= 5.8): single global buffer, lower overhead.
-//   - Perf event array (kernel >= 4.9): per-CPU, broader compatibility.
+// Uses PERF_EVENT_ARRAY for event delivery (kernel >= 4.9).
 func Load() (*Objects, error) {
 	// Bump the locked memory limit – needed on kernels without BPF_PROG_TYPE_CGROUP_SKB
 	// and on older kernels where the default is very small.
@@ -59,24 +52,10 @@ func Load() (*Objects, error) {
 		return nil, fmt.Errorf("remove memlock rlimit: %w", err)
 	}
 
-	// Feature detection: ring buffer available on kernel >= 5.8
-	useRingBuf := features.HaveMapType(ebpf.RingBuf) == nil
-
 	// Parse the embedded ELF
 	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(PbmonELF))
 	if err != nil {
 		return nil, fmt.Errorf("load collection spec: %w", err)
-	}
-
-	// If ring buffer is not supported, patch the map type to perf event array.
-	// (The C code declares it as PERF_EVENT_ARRAY; this block is a no-op on old kernels.)
-	if useRingBuf {
-		if m, ok := spec.Maps["events"]; ok {
-			m.Type = ebpf.RingBuf
-			m.KeySize = 0
-			m.ValueSize = 0
-			m.MaxEntries = 4 * 1024 * 1024 // 4 MB ring buffer
-		}
 	}
 
 	// Load into kernel
@@ -89,9 +68,7 @@ func Load() (*Objects, error) {
 		return nil, fmt.Errorf("create BPF collection: %w", err)
 	}
 
-	objs := &Objects{
-		useRingBuf: useRingBuf,
-	}
+	objs := &Objects{}
 
 	// Extract maps
 	var ok bool
@@ -195,9 +172,7 @@ func Load() (*Objects, error) {
 		}
 		l, err := link.Tracepoint(a.group, a.name, prog, nil)
 		if err != nil {
-			// Best-effort: log but don't fail on individual tracepoints
-			// (some may not exist on all kernel versions)
-			_ = err
+			// Best-effort: skip tracepoints that don't exist on this kernel version
 			continue
 		}
 		objs.links = append(objs.links, l)
@@ -205,3 +180,4 @@ func Load() (*Objects, error) {
 
 	return objs, nil
 }
+
