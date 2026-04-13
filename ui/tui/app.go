@@ -93,6 +93,7 @@ type AppModel struct {
 	store   *store.Store
 	keys    keyMap
 	ctx     context.Context
+	cancel  context.CancelFunc
 
 	// State
 	activePanel  panel
@@ -114,12 +115,15 @@ type AppModel struct {
 
 // Start creates and runs the bubbletea TUI. It returns when ctx is cancelled
 // or the user presses q.
-func Start(ctx context.Context, cfg *config.Config, s *store.Store) error {
+// cancel is the CancelFunc for the parent context; it is called when the user
+// requests quit so that the rest of the application shuts down cleanly.
+func Start(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s *store.Store) error {
 	m := &AppModel{
 		cfg:        cfg,
 		store:      s,
 		keys:       defaultKeys,
 		ctx:        ctx,
+		cancel:     cancel,
 		sortMode:   sortByNetRx,
 		showFileIO: cfg.IncludeFileIO,
 		width:      120,
@@ -192,6 +196,9 @@ func (m AppModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case msg.String() == "q" || msg.String() == "ctrl+c":
+		if m.cancel != nil {
+			m.cancel() // signal main goroutine to shut down
+		}
 		return m, tea.Quit
 
 	case msg.String() == "tab":

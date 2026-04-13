@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
@@ -240,6 +239,3 @@ func readSocketInode(pid, fd uint32) (uint64, bool) {
 	return inode, true
 }
 
-// drainReader drains r to satisfy the interface – not used but satisfies
-// io.Reader import.
-var _ io.Reader = (*os.File)(nil)

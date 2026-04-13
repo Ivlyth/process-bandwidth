@@ -187,8 +187,28 @@ func (c *Collector) handleIO(e *IOEvent) {
 		conn.IO.AddRx(e.Bytes)
 	}
 
-	// Lazily resolve socket connection info
-	if model.FDClass(e.FDClass) == model.FDClassSocket && conn.Info() == nil {
+	// Determine the effective FD class for process-level routing.
+	// eBPF only knows the class for FDs it observed being created (socket/open/
+	// accept after pbmon started). For pre-existing FDs it reports FDClassUnknown.
+	// We resolve these lazily via /proc/PID/fd/FD: if the symlink points to a
+	// socket inode present in the NetResolver cache, treat it as FDClassSocket.
+	// The result is cached on the Connection via SetInfo so subsequent events
+	// for the same FD skip the /proc read.
+	effectiveClass := model.FDClass(e.FDClass)
+
+	if effectiveClass == model.FDClassUnknown {
+		if conn.Info() != nil {
+			// Already resolved on a previous event – it's a socket.
+			effectiveClass = model.FDClassSocket
+		} else {
+			// First time seeing this FD with unknown class; try /proc resolution.
+			if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
+				conn.SetInfo(info)
+				effectiveClass = model.FDClassSocket
+			}
+		}
+	} else if effectiveClass == model.FDClassSocket && conn.Info() == nil {
+		// BPF knows it's a socket but we don't yet have endpoint info.
 		if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
 			conn.SetInfo(info)
 		}
@@ -196,7 +216,7 @@ func (c *Collector) handleIO(e *IOEvent) {
 
 	// Update process-level aggregate counters.
 	// Network and File I/O are tracked separately.
-	switch model.FDClass(e.FDClass) {
+	switch effectiveClass {
 	case model.FDClassSocket:
 		if !c.cfg.IncludeLocal {
 			// Skip loopback connections

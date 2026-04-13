@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -117,7 +116,7 @@ func run(cfg *config.Config, logPath string, noTUI bool) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := tui.Start(ctx, cfg, coll.Store()); err != nil {
+			if err := tui.Start(ctx, stop, cfg, coll.Store()); err != nil {
 				logger.Error("TUI error", "err", err)
 			}
 		}()
@@ -188,5 +187,3 @@ func checkKernelVersion(major, minor, patch int) error {
 	return nil
 }
 
-// Ensure time is imported (used in idle timeout default).
-var _ = time.Second
