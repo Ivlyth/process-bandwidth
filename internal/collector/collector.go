@@ -238,8 +238,8 @@ func (c *Collector) handleIO(e *IOEvent) {
 		if conn.Info() != nil {
 			// Already resolved on a previous event – it's a socket.
 			effectiveClass = model.FDClassSocket
-		} else {
-			// First time seeing this FD with unknown class; try /proc resolution.
+		} else if !conn.NetLookupDone() {
+			// First attempt: try to resolve via /proc/net (inode lookup).
 			if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
 				conn.SetInfo(info)
 				effectiveClass = model.FDClassSocket
@@ -249,11 +249,15 @@ func (c *Collector) handleIO(e *IOEvent) {
 					"proto", info.Protocol, "local", info.Local, "remote", info.Remote,
 				)
 			} else {
-				c.logger.Debug("handleIO: FDClass unknown, /proc resolution failed",
-					"pid", e.PID, "fd", e.FD, "bytes", e.Bytes,
+				// Not a socket (or not yet visible in /proc/net).
+				// Cache the negative result so we stop retrying on every event.
+				conn.MarkNetLookupDone()
+				c.logger.Debug("handleIO: FDClass unknown, not a network socket (will not retry)",
+					"pid", e.PID, "fd", e.FD,
 				)
 			}
 		}
+		// If conn.NetLookupDone() && conn.Info()==nil: confirmed non-socket, skip silently.
 	} else if effectiveClass == model.FDClassSocket && conn.Info() == nil {
 		// BPF knows it's a socket but we don't yet have endpoint info.
 		if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
