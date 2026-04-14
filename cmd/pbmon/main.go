@@ -86,10 +86,14 @@ func run(cfg *config.Config, logPath string, noTUI bool) error {
 		return err
 	}
 
-	// Context tied to OS signals for graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(),
+	// Context tied to OS signals for graceful shutdown.
+	// stop() unregisters signal handling; cancel() is the function we hand to
+	// the TUI so it can trigger shutdown when the user presses q / Ctrl+C.
+	signalCtx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
 
 	// Create and start the collector (loads eBPF)
 	coll, err := collector.New(cfg, logger)
@@ -116,7 +120,7 @@ func run(cfg *config.Config, logPath string, noTUI bool) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := tui.Start(ctx, stop, cfg, coll.Store()); err != nil {
+			if err := tui.Start(ctx, cancel, cfg, coll.Store()); err != nil {
 				logger.Error("TUI error", "err", err)
 			}
 		}()

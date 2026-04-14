@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -89,41 +90,36 @@ type quitMsg struct{}
 
 // AppModel is the top-level bubbletea model for the TUI.
 type AppModel struct {
-	cfg     *config.Config
-	store   *store.Store
-	keys    keyMap
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cfg   *config.Config
+	store *store.Store
+	keys  keyMap
 
 	// State
-	activePanel  panel
-	procCursor   int
-	connCursor   int
-	sortMode     sortBy
-	filterStr    string
-	filtering    bool
-	paused       bool
-	showFileIO   bool
-	showHelp     bool
-	width        int
-	height       int
+	activePanel panel
+	procCursor  int
+	connCursor  int
+	sortMode    sortBy
+	filterStr   string
+	filtering   bool
+	paused      bool
+	showFileIO  bool
+	showHelp    bool
+	width       int
+	height      int
 
 	// Cached snapshot (updated on tick)
-	procs    []*model.Process
-	conns    []*model.Connection // connections of selected process
+	procs []*model.Process
+	conns []*model.Connection // connections of selected process
 }
 
-// Start creates and runs the bubbletea TUI. It returns when ctx is cancelled
-// or the user presses q.
-// cancel is the CancelFunc for the parent context; it is called when the user
-// requests quit so that the rest of the application shuts down cleanly.
+// Start creates and runs the bubbletea TUI. It blocks until the TUI exits,
+// then calls cancel() to trigger graceful shutdown of the rest of the app.
+// ctx is used so that an external signal (SIGTERM) also causes the TUI to exit.
 func Start(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s *store.Store) error {
 	m := &AppModel{
 		cfg:        cfg,
 		store:      s,
 		keys:       defaultKeys,
-		ctx:        ctx,
-		cancel:     cancel,
 		sortMode:   sortByNetRx,
 		showFileIO: cfg.IncludeFileIO,
 		width:      120,
@@ -136,6 +132,11 @@ func Start(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s
 		tea.WithContext(ctx),
 	)
 	_, err := p.Run()
+	// Always signal shutdown after the TUI exits (q, ctrl+c, or external signal).
+	cancel()
+	if errors.Is(err, context.Canceled) {
+		return nil // expected when ctx is cancelled externally
+	}
 	return err
 }
 
@@ -196,9 +197,6 @@ func (m AppModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case msg.String() == "q" || msg.String() == "ctrl+c":
-		if m.cancel != nil {
-			m.cancel() // signal main goroutine to shut down
-		}
 		return m, tea.Quit
 
 	case msg.String() == "tab":
