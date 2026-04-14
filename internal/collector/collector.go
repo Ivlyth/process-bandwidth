@@ -59,12 +59,11 @@ func New(cfg *config.Config, logger *slog.Logger) (*Collector, error) {
 	}
 	logger.Debug("eBPF loaded", "tracepoints_attached", objs.LinkCount())
 
-	reader, err := bpfpkg.NewReader(objs)
+	reader, err := bpfpkg.NewReaderWithLogger(objs, logger)
 	if err != nil {
 		objs.Close()
 		return nil, err
 	}
-	logger.Debug("perf event reader created")
 
 	ctx, cancel := context.WithCancel(context.Background())
 

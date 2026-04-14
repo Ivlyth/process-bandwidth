@@ -107,13 +107,23 @@ struct {
     __uint(max_entries, 4096);
 } tid_pipeptr_map SEC(".maps");
 
-// events: output ring (perf event array; Go loader may swap to ringbuf)
+// events: kernel→userspace event delivery channel.
+// Two compilation modes (selected by -DUSE_RINGBUF at compile time):
+//   USE_RINGBUF=1 → BPF_MAP_TYPE_RINGBUF   (kernel >= 5.8, preferred)
+//   USE_RINGBUF=0 → BPF_MAP_TYPE_PERF_EVENT_ARRAY (kernel >= 4.9, fallback)
+#ifdef USE_RINGBUF
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 22); // 4 MiB shared ring
+} events SEC(".maps");
+#else
 struct {
     __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-    __uint(max_entries, 0); // 0 -> kernel sets to nr_cpus
+    __uint(max_entries, 512); // clamped to nr_possible_cpus by cilium/ebpf
     __uint(key_size, sizeof(__u32));
     __uint(value_size, sizeof(__u32));
 } events SEC(".maps");
+#endif
 
 // ──────────────────────────────────────────────────────────────
 // Helpers
@@ -165,7 +175,11 @@ static __always_inline void emit_io_event(void *ctx,
     ev.fd_class  = cls;
     ev.direction = dir;
     ev.bytes     = bytes;
+#ifdef USE_RINGBUF
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+#else
     bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+#endif
 }
 
 static __always_inline void emit_fd_event(void *ctx,
@@ -179,7 +193,11 @@ static __always_inline void emit_fd_event(void *ctx,
     ev.fd       = fd;
     ev.fd_class = cls;
     ev.op       = op;
+#ifdef USE_RINGBUF
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+#else
     bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+#endif
 }
 
 static __always_inline void emit_proc_event(void *ctx,
@@ -190,7 +208,11 @@ static __always_inline void emit_proc_event(void *ctx,
     ev.pid     = tgid;
     ev.tid     = tid;
     ev.op      = op;
+#ifdef USE_RINGBUF
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+#else
     bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+#endif
 }
 
 // ──────────────────────────────────────────────────────────────

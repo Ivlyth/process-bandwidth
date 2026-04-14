@@ -26,9 +26,10 @@ all: ebpf build
 # eBPF compilation (clang → BPF ELF object, embedded in binary)
 # ──────────────────────────────────────────────────────────────
 
-BPF_SRC  := internal/bpf/c/pbmon.c
-BPF_OBJ  := internal/bpf/pbmon_bpf.o
-BPF_HDRS := internal/bpf/c/headers
+BPF_SRC      := internal/bpf/c/pbmon.c
+BPF_OBJ      := internal/bpf/pbmon_bpf.o
+BPF_OBJ_RB   := internal/bpf/pbmon_bpf_ringbuf.o
+BPF_HDRS     := internal/bpf/c/headers
 
 CLANG_FLAGS := \
 	-O2 -g \
@@ -51,14 +52,18 @@ CLANG_FLAGS := \
 	-fno-unwind-tables \
 	-fno-asynchronous-unwind-tables
 
-ebpf: $(BPF_OBJ)
+ebpf: $(BPF_OBJ) $(BPF_OBJ_RB)
 
 # Detect arch-specific system include path for asm/types.h etc.
 SYSROOT_INC ?= /usr/include/$(shell uname -m | sed 's/x86_64/x86_64-linux-gnu/;s/aarch64/aarch64-linux-gnu/')
 
 $(BPF_OBJ): $(BPF_SRC) $(wildcard $(BPF_HDRS)/*.h)
 	$(CLANG) $(CLANG_FLAGS) -I$(BPF_HDRS) -I$(SYSROOT_INC) -c $< -o $@
-	@echo "  eBPF compiled: $@"
+	@echo "  eBPF compiled (perf): $@"
+
+$(BPF_OBJ_RB): $(BPF_SRC) $(wildcard $(BPF_HDRS)/*.h)
+	$(CLANG) $(CLANG_FLAGS) -DUSE_RINGBUF=1 -I$(BPF_HDRS) -I$(SYSROOT_INC) -c $< -o $@
+	@echo "  eBPF compiled (ringbuf): $@"
 
 # ──────────────────────────────────────────────────────────────
 # Go code generation
@@ -91,7 +96,7 @@ test:
 # ──────────────────────────────────────────────────────────────
 
 clean:
-	rm -f pbmon $(BPF_OBJ)
+	rm -f pbmon $(BPF_OBJ) $(BPF_OBJ_RB)
 	rm -f internal/bpf/pbmon_bpf*_*.go internal/bpf/pbmon_bpf*.o
 
 # ──────────────────────────────────────────────────────────────

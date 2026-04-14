@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 )
@@ -62,8 +63,18 @@ func Load(logger *slog.Logger) (*Objects, error) {
 	}
 	logger.Debug("eBPF memlock rlimit removed")
 
+	// Choose ELF variant: ring buffer (kernel >= 5.8) preferred; perf array fallback.
+	var elfData []byte
+	if features.HaveMapType(ebpf.RingBuf) == nil {
+		elfData = PbmonELFRingBuf
+		logger.Debug("ring buffer supported (kernel >= 5.8), using ringbuf ELF")
+	} else {
+		elfData = PbmonELF
+		logger.Debug("ring buffer not supported, falling back to perf event array ELF")
+	}
+
 	// Parse the embedded ELF
-	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(PbmonELF))
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(elfData))
 	if err != nil {
 		return nil, fmt.Errorf("load collection spec: %w", err)
 	}
@@ -78,7 +89,13 @@ func Load(logger *slog.Logger) (*Objects, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create BPF collection: %w", err)
 	}
-	logger.Debug("eBPF collection loaded into kernel")
+	// Log loaded programs to diagnose "program not in ELF" issues.
+	logger.Debug("eBPF collection loaded into kernel", "loaded_programs", len(coll.Programs))
+	if logger.Handler().Enabled(nil, slog.LevelDebug) {
+		for name := range coll.Programs {
+			logger.Debug("eBPF program loaded", "name", name)
+		}
+	}
 
 	objs := &Objects{}
 
