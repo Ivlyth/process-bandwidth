@@ -3,7 +3,20 @@
 # ──────────────────────────────────────────────────────────────
 # Tools
 # ──────────────────────────────────────────────────────────────
-CLANG   ?= clang
+
+# On macOS, Apple's clang does not include the BPF backend.
+# Auto-detect Homebrew LLVM clang (brew install llvm) when on Darwin.
+ifeq ($(shell uname -s),Darwin)
+  _BREW_PREFIX := $(shell brew --prefix llvm 2>/dev/null)
+  ifneq ($(_BREW_PREFIX),)
+    CLANG ?= $(_BREW_PREFIX)/bin/clang
+  else
+    $(error On macOS, Apple clang has no BPF backend. Install upstream LLVM: brew install llvm)
+  endif
+else
+  CLANG ?= clang
+endif
+
 GO      ?= go
 ARCH    ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 UNAME_R ?= $(shell uname -r)
