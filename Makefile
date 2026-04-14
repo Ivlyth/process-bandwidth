@@ -54,15 +54,18 @@ CLANG_FLAGS := \
 
 ebpf: $(BPF_OBJ) $(BPF_OBJ_RB)
 
-# Detect arch-specific system include path for asm/types.h etc.
+# Arch-specific system include path for asm/types.h etc.
+# Only added when the directory exists – bpf_helpers.h is self-contained so
+# no system Linux headers are required (enables cross-compilation from macOS).
 SYSROOT_INC ?= /usr/include/$(shell uname -m | sed 's/x86_64/x86_64-linux-gnu/;s/aarch64/aarch64-linux-gnu/')
+SYSROOT_FLAGS := $(shell test -d "$(SYSROOT_INC)" && echo "-I$(SYSROOT_INC)")
 
 $(BPF_OBJ): $(BPF_SRC) $(wildcard $(BPF_HDRS)/*.h)
-	$(CLANG) $(CLANG_FLAGS) -I$(BPF_HDRS) -I$(SYSROOT_INC) -c $< -o $@
+	$(CLANG) $(CLANG_FLAGS) -I$(BPF_HDRS) $(SYSROOT_FLAGS) -c $< -o $@
 	@echo "  eBPF compiled (perf): $@"
 
 $(BPF_OBJ_RB): $(BPF_SRC) $(wildcard $(BPF_HDRS)/*.h)
-	$(CLANG) $(CLANG_FLAGS) -DUSE_RINGBUF=1 -I$(BPF_HDRS) -I$(SYSROOT_INC) -c $< -o $@
+	$(CLANG) $(CLANG_FLAGS) -DUSE_RINGBUF=1 -I$(BPF_HDRS) $(SYSROOT_FLAGS) -c $< -o $@
 	@echo "  eBPF compiled (ringbuf): $@"
 
 # ──────────────────────────────────────────────────────────────
