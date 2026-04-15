@@ -7,7 +7,7 @@
 # On macOS, Apple's clang does not include the BPF backend.
 # Auto-detect Homebrew LLVM clang (brew install llvm) when on Darwin.
 ifeq ($(shell uname -s),Darwin)
-  _BREW_PREFIX := $(shell brew --prefix llvm 2>/dev/null)
+  _BREW_PREFIX := $(shell brew --prefix --installed llvm 2>/dev/null)
   ifneq ($(_BREW_PREFIX),)
     CLANG ?= $(_BREW_PREFIX)/bin/clang
   else
