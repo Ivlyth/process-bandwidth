@@ -17,10 +17,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Unit tests don't need eBPF objects – the embed directives are skipped
-      # by the test build because no BPF-dependent code is exercised.
+      # internal/bpf and internal/collector embed compiled BPF objects
+      # (pbmon_bpf.o / pbmon_bpf_ringbuf.o) which are only produced by
+      # `make ebpf`. The unit-test job skips those two packages; the
+      # integration-test job covers them end-to-end.
       - name: Run unit tests
-        run: go test -race -count=1 ./internal/... ./config/... ./ui/...
+        run: go test -race -count=1 ./internal/model/... ./internal/store/... ./config/... ./ui/...
 
   integration-test:
     name: Integration test (eBPF)
