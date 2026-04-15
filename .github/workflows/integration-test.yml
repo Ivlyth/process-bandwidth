@@ -1,0 +1,59 @@
+name: Integration Test
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+jobs:
+  unit-test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Unit tests don't need eBPF objects – the embed directives are skipped
+      # by the test build because no BPF-dependent code is exercised.
+      - name: Run unit tests
+        run: go test -race -count=1 ./internal/... ./config/... ./ui/...
+
+  integration-test:
+    name: Integration test (eBPF)
+    runs-on: ubuntu-latest
+    # eBPF tracepoints require the BPF LSM / CAP_BPF. The standard
+    # ubuntu-latest runner runs as a passwordless-sudo user on a 5.15+ kernel,
+    # so `sudo ./pbmon test` works without a privileged container.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install clang / llvm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm
+
+      - name: Compile eBPF objects
+        run: make ebpf
+
+      - name: Build pbmon binary
+        run: make build
+
+      - name: Show kernel & tool versions
+        run: |
+          uname -r
+          clang --version | head -1
+          go version
+
+      # Raise the locked-memory limit before loading BPF maps.
+      - name: Run integration test
+        run: sudo -E ./pbmon test --duration 25s --web-port 0
+        timeout-minutes: 3

@@ -64,6 +64,7 @@ Minimum Linux kernel version: 4.9`,
 	f.BoolVar(&noTUI, "no-tui", false, "Disable terminal UI (useful with --web-port only)")
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newTestCmd())
 
 	return root
 }
