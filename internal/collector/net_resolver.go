@@ -218,22 +218,42 @@ func parseHexAddr(s string, ipv6 bool) string {
 	return fmt.Sprintf("%s:%d", ip.String(), port)
 }
 
+// ProbeFDClass reads /proc/pid/fd/fd as a symlink and determines the FD class.
+//
+// Returns:
+//   - (FDClassSocket, inode) for "socket:[inode]" symlinks
+//   - (FDClassPipe,   0)     for "pipe:[inode]"   symlinks
+//   - (FDClassFile,   0)     for absolute-path     symlinks (regular files)
+//   - (FDClassUnknown, 0)    if the symlink cannot be read or doesn't match
+func ProbeFDClass(pid, fd uint32) (model.FDClass, uint64) {
+	linkPath := "/proc/" + uitoa(pid) + "/fd/" + uitoa(fd)
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		return model.FDClassUnknown, 0
+	}
+	switch {
+	case strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]"):
+		inodeStr := target[len("socket:[") : len(target)-1]
+		inode, err := strconv.ParseUint(inodeStr, 10, 64)
+		if err != nil {
+			return model.FDClassUnknown, 0
+		}
+		return model.FDClassSocket, inode
+	case strings.HasPrefix(target, "pipe:["):
+		return model.FDClassPipe, 0
+	case strings.HasPrefix(target, "/"):
+		return model.FDClassFile, 0
+	default:
+		return model.FDClassUnknown, 0
+	}
+}
+
 // readSocketInode reads /proc/pid/fd/fd as a symlink and extracts the inode
 // from a "socket:[12345]" value.
 // Returns (inode, true) on success, (0, false) otherwise.
 func readSocketInode(pid, fd uint32) (uint64, bool) {
-	linkPath := "/proc/" + uitoa(pid) + "/fd/" + uitoa(fd)
-	target, err := os.Readlink(linkPath)
-	if err != nil {
-		return 0, false
-	}
-	// target has the form "socket:[12345]"
-	if !strings.HasPrefix(target, "socket:[") || !strings.HasSuffix(target, "]") {
-		return 0, false
-	}
-	inodeStr := target[len("socket:[") : len(target)-1]
-	inode, err := strconv.ParseUint(inodeStr, 10, 64)
-	if err != nil {
+	fdClass, inode := ProbeFDClass(pid, fd)
+	if fdClass != model.FDClassSocket {
 		return 0, false
 	}
 	return inode, true

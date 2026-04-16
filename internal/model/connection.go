@@ -47,10 +47,12 @@ type Connection struct {
 	// Protected by atomic pointer swap (set once, never mutated).
 	info unsafe.Pointer // *ConnectionInfo
 
-	// netLookupDone is set to 1 after the first /proc net lookup attempt.
-	// When set and info is still nil, the FD is confirmed non-socket —
-	// future events skip the expensive /proc read.
-	netLookupDone atomic.Uint32
+	// resolvedClass stores the FD class once determined via /proc symlink
+	// resolution for pre-BPF FDs (FDClassUnknown at creation).
+	// 0 = not yet resolved, non-zero = resolved class value.
+	// Sockets that are confirmed by symlink but whose inode isn't in the
+	// NetResolver cache yet keep this at 0 so the next event retries.
+	resolvedClass atomic.Uint32
 
 	// File fields – valid when Class == FDClassFile or FDClassPipe.
 	Path string
@@ -87,15 +89,15 @@ func (c *Connection) Info() *ConnectionInfo {
 	return (*ConnectionInfo)(p)
 }
 
-// MarkNetLookupDone records that a /proc net lookup was attempted for this FD.
-// After this is set and Info() is still nil, future lookups are skipped.
-func (c *Connection) MarkNetLookupDone() {
-	c.netLookupDone.Store(1)
+// ResolvedClass returns the FD class determined by /proc symlink resolution,
+// or FDClassUnknown (0) if not yet resolved.
+func (c *Connection) ResolvedClass() FDClass {
+	return FDClass(c.resolvedClass.Load())
 }
 
-// NetLookupDone reports whether a /proc net lookup has already been attempted.
-func (c *Connection) NetLookupDone() bool {
-	return c.netLookupDone.Load() != 0
+// SetResolvedClass records the resolved FD class for this connection.
+func (c *Connection) SetResolvedClass(class FDClass) {
+	c.resolvedClass.Store(uint32(class))
 }
 
 // Touch updates the last-activity timestamp.

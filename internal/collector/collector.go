@@ -227,37 +227,59 @@ func (c *Collector) handleIO(e *IOEvent) {
 	// Determine the effective FD class for process-level routing.
 	// eBPF only knows the class for FDs it observed being created (socket/open/
 	// accept after pbmon started). For pre-existing FDs it reports FDClassUnknown.
-	// We resolve these lazily via /proc/PID/fd/FD: if the symlink points to a
-	// socket inode present in the NetResolver cache, treat it as FDClassSocket.
-	// The result is cached on the Connection via SetInfo so subsequent events
-	// for the same FD skip the /proc read.
+	// We resolve lazily via /proc/PID/fd/FD symlink:
+	//   "socket:[inode]" → FDClassSocket (look up endpoint in NetResolver cache)
+	//   "pipe:[inode]"   → FDClassPipe
+	//   "/absolute/path" → FDClassFile
+	// The resolved class is cached in conn.resolvedClass so subsequent events
+	// for the same FD skip the /proc symlink read entirely.
+	// For sockets, if the inode isn't in the NetResolver cache yet we trigger an
+	// immediate refresh and retry on the next event (no permanent give-up).
 	effectiveClass := model.FDClass(e.FDClass)
 
 	if effectiveClass == model.FDClassUnknown {
 		c.dbgClassUnknown.Add(1)
 		if conn.Info() != nil {
-			// Already resolved on a previous event – it's a socket.
+			// Previously resolved as a socket (endpoint info present).
 			effectiveClass = model.FDClassSocket
-		} else if !conn.NetLookupDone() {
-			// First attempt: try to resolve via /proc/net (inode lookup).
-			if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
-				conn.SetInfo(info)
-				effectiveClass = model.FDClassSocket
+		} else if rc := conn.ResolvedClass(); rc != model.FDClassUnknown {
+			// Already classified as file/pipe on a prior event.
+			effectiveClass = rc
+		} else {
+			// First (or retried) attempt: probe the /proc symlink.
+			fdClass, inode := ProbeFDClass(e.PID, e.FD)
+			switch fdClass {
+			case model.FDClassSocket:
+				if info := c.netRes.LookupByInode(inode); info != nil {
+					conn.SetInfo(info)
+					conn.SetResolvedClass(model.FDClassSocket)
+					effectiveClass = model.FDClassSocket
+					c.dbgClassResolved.Add(1)
+					c.logger.Debug("handleIO: pre-BPF socket FD resolved",
+						"pid", e.PID, "fd", e.FD,
+						"proto", info.Protocol, "local", info.Local, "remote", info.Remote,
+					)
+				} else {
+					// Symlink confirms it's a socket, but the inode isn't in the
+					// /proc/net cache yet. Trigger an immediate refresh and retry
+					// on the next event — do NOT give up permanently.
+					c.netRes.TriggerRefresh()
+					c.logger.Debug("handleIO: pre-BPF socket inode not in cache yet, will retry",
+						"pid", e.PID, "fd", e.FD, "inode", inode,
+					)
+				}
+			case model.FDClassFile, model.FDClassPipe:
+				conn.SetResolvedClass(fdClass)
+				effectiveClass = fdClass
 				c.dbgClassResolved.Add(1)
-				c.logger.Debug("handleIO: unknown FD resolved via /proc",
-					"pid", e.PID, "fd", e.FD,
-					"proto", info.Protocol, "local", info.Local, "remote", info.Remote,
+				c.logger.Debug("handleIO: pre-BPF FD classified",
+					"pid", e.PID, "fd", e.FD, "class", fdClass,
 				)
-			} else {
-				// Not a socket (or not yet visible in /proc/net).
-				// Cache the negative result so we stop retrying on every event.
-				conn.MarkNetLookupDone()
-				c.logger.Debug("handleIO: FDClass unknown, not a network socket (will not retry)",
-					"pid", e.PID, "fd", e.FD,
-				)
+			default:
+				// Symlink unreadable (process may have exited or FD already closed).
+				// Skip silently; don't cache so we try again if another event arrives.
 			}
 		}
-		// If conn.NetLookupDone() && conn.Info()==nil: confirmed non-socket, skip silently.
 	} else if effectiveClass == model.FDClassSocket && conn.Info() == nil {
 		// BPF knows it's a socket but we don't yet have endpoint info.
 		if info := c.netRes.LookupByFD(e.PID, e.FD); info != nil {
