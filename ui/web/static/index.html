@@ -149,8 +149,10 @@ function pbmon() {
     selectedConns: [],
     chart: null,
     chartLabels: [],
-    chartDataRx: [],
-    chartDataTx: [],
+    chartNetRx: [],
+    chartNetTx: [],
+    chartFileRd: [],
+    chartFileWr: [],
 
     init() {
       this.connect();
@@ -170,10 +172,9 @@ function pbmon() {
       this.ws.onmessage = (e) => {
         const snap = JSON.parse(e.data);
         this.processes = snap.processes || [];
-        // Update chart for selected process
         if (this.selectedPID) {
           const p = this.processes.find(x => x.pid === this.selectedPID);
-          if (p) this.updateChart(p);
+          if (p) this.appendChartPoint(p);
         }
       };
     },
@@ -201,10 +202,31 @@ function pbmon() {
     selectProcess(p) {
       this.selectedPID = p.pid;
       this.selectedName = p.name;
-      this.chartLabels = [];
-      this.chartDataRx = [];
-      this.chartDataTx = [];
-      // Fetch connection details
+      this.selectedConns = [];
+
+      // Load history for chart pre-population.
+      fetch(`/api/processes/${p.pid}`)
+        .then(r => r.json())
+        .then(d => {
+          const netRx  = d.net_rx_history  || [];
+          const netTx  = d.net_tx_history  || [];
+          const fileRd = d.file_rd_history || [];
+          const fileWr = d.file_wr_history || [];
+          const n = netRx.length;
+          this.chartLabels = Array.from({length: n}, (_, i) => `${i - n + 1}s`);
+          this.chartNetRx  = netRx;
+          this.chartNetTx  = netTx;
+          this.chartFileRd = fileRd;
+          this.chartFileWr = fileWr;
+          this._syncChart();
+        })
+        .catch(() => {
+          this.chartLabels = []; this.chartNetRx = []; this.chartNetTx = [];
+          this.chartFileRd = []; this.chartFileWr = [];
+          this._syncChart();
+        });
+
+      // Fetch connection list.
       fetch(`/api/processes?conns=1`)
         .then(r => r.json())
         .then(procs => {
@@ -222,38 +244,56 @@ function pbmon() {
         data: {
           labels: this.chartLabels,
           datasets: [
-            { label: 'Net↓', data: this.chartDataRx, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.1)', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
-            { label: 'Net↑', data: this.chartDataTx, borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.1)', borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+            { label: 'Net↓',   data: this.chartNetRx,  borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.08)',  borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'Net↑',   data: this.chartNetTx,  borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'File R', data: this.chartFileRd, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.08)',  borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'File W', data: this.chartFileWr, borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
           ]
         },
         options: {
           animation: false,
           responsive: true,
-          plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { labels: { color: '#94a3b8', boxWidth: 12, font: { size: 11 } } },
+            tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${this.fmt(ctx.raw)}` } }
+          },
           scales: {
             x: { display: false },
-            y: { ticks: { color: '#64748b', font: { size: 10 }, callback: v => this.fmt(v) }, grid: { color: '#1e293b' } }
+            y: { min: 0, ticks: { color: '#64748b', font: { size: 10 }, callback: v => this.fmt(v) }, grid: { color: '#1e293b' } }
           }
         }
       });
     },
 
-    updateChart(p) {
+    // Append a single live data point from a WebSocket tick.
+    appendChartPoint(p) {
       const now = new Date().toLocaleTimeString();
       this.chartLabels.push(now);
-      this.chartDataRx.push(p.net_rx_rate || 0);
-      this.chartDataTx.push(p.net_tx_rate || 0);
-      if (this.chartLabels.length > 60) {
+      this.chartNetRx.push(p.net_rx_rate  || 0);
+      this.chartNetTx.push(p.net_tx_rate  || 0);
+      this.chartFileRd.push(p.file_rd_rate || 0);
+      this.chartFileWr.push(p.file_wr_rate || 0);
+      const max = 60;
+      while (this.chartLabels.length > max) {
         this.chartLabels.shift();
-        this.chartDataRx.shift();
-        this.chartDataTx.shift();
+        this.chartNetRx.shift();
+        this.chartNetTx.shift();
+        this.chartFileRd.shift();
+        this.chartFileWr.shift();
       }
-      if (this.chart) {
-        this.chart.data.labels = this.chartLabels;
-        this.chart.data.datasets[0].data = this.chartDataRx;
-        this.chart.data.datasets[1].data = this.chartDataTx;
-        this.chart.update('none');
-      }
+      this._syncChart();
+    },
+
+    // Push current data arrays into Chart.js and redraw.
+    _syncChart() {
+      if (!this.chart) return;
+      this.chart.data.labels           = this.chartLabels;
+      this.chart.data.datasets[0].data = this.chartNetRx;
+      this.chart.data.datasets[1].data = this.chartNetTx;
+      this.chart.data.datasets[2].data = this.chartFileRd;
+      this.chart.data.datasets[3].data = this.chartFileWr;
+      this.chart.update('none');
     },
 
     fmt(bps) {

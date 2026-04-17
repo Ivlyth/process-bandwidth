@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -172,9 +174,13 @@ func apiProcesses(s *store.Store) http.HandlerFunc {
 			}
 			if r.URL.Query().Get("conns") == "1" {
 				p.EachConnection(func(c *model.Connection) bool {
+					cls := c.Class
+					if rc := c.ResolvedClass(); rc != model.FDClassUnknown {
+						cls = rc
+					}
 					cr := connResp{
 						FD:    c.FD,
-						Class: c.Class.String(),
+						Class: cls.String(),
 					}
 					if info := c.Info(); info != nil {
 						cr.Protocol = info.Protocol
@@ -216,6 +222,49 @@ func apiOverview(s *store.Store) http.HandlerFunc {
 			"total_file_rd_bps": totalFileRd,
 			"total_file_wr_bps": totalFileWr,
 			"dropped_events":   s.Dropped(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// apiProcessDetail handles GET /api/processes/{pid} and returns per-process
+// historical bandwidth samples for use by the web chart.
+func apiProcessDetail(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pidStr := strings.TrimPrefix(r.URL.Path, "/api/processes/")
+		pid64, err := strconv.ParseUint(pidStr, 10, 32)
+		if err != nil {
+			http.Error(w, "bad pid", http.StatusBadRequest)
+			return
+		}
+		proc := s.Get(uint32(pid64))
+		if proc == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		toRates := func(samples []model.IOSample, rx bool) []float64 {
+			rates := make([]float64, len(samples))
+			for i, s := range samples {
+				if rx {
+					rates[i] = s.RxRateBps()
+				} else {
+					rates[i] = s.TxRateBps()
+				}
+			}
+			return rates
+		}
+
+		netHist := proc.Net.History()
+		fileHist := proc.File.History()
+		resp := map[string]any{
+			"pid":             proc.PID,
+			"name":            proc.Name(),
+			"net_rx_history":  toRates(netHist, true),
+			"net_tx_history":  toRates(netHist, false),
+			"file_rd_history": toRates(fileHist, true),
+			"file_wr_history": toRates(fileHist, false),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

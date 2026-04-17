@@ -38,6 +38,7 @@ func Start(ctx context.Context, cfg *config.Config, s *store.Store) error {
 
 	// REST API
 	mux.HandleFunc("/api/processes", apiProcesses(s))
+	mux.HandleFunc("/api/processes/", apiProcessDetail(s))
 	mux.HandleFunc("/api/overview", apiOverview(s))
 
 	// WebSocket

@@ -346,25 +346,61 @@ func (m *AppModel) renderProcessTable(height int) string {
 
 func (m *AppModel) renderConnTable(height int) string {
 	half := m.width / 2
+	var sb strings.Builder
+
+	// Sparklines for selected process (top of right panel)
+	sparkH := 0
+	if len(m.procs) > 0 && m.procCursor < len(m.procs) {
+		proc := m.procs[m.procCursor]
+		netH := proc.Net.History()
+		fileH := proc.File.History()
+		sparkW := half - 22
+		if sparkW < 10 {
+			sparkW = 10
+		}
+
+		writeSpark := func(label string, style lipgloss.Style, hist []model.IOSample, rate float64, get func(model.IOSample) float64) {
+			sb.WriteString(style.Render(padR(label, 6)) + renderSparkline(hist, sparkW, get) + "  " + style.Render(padR(formatRate(rate), 10)) + "\n")
+			sparkH++
+		}
+		writeSpark("Net↓", rxStyle, netH, proc.Net.RxRate(), func(s model.IOSample) float64 { return s.RxRateBps() })
+		writeSpark("Net↑", txStyle, netH, proc.Net.TxRate(), func(s model.IOSample) float64 { return s.TxRateBps() })
+		if m.showFileIO {
+			writeSpark("FileR", fileStyle, fileH, proc.File.RxRate(), func(s model.IOSample) float64 { return s.RxRateBps() })
+			writeSpark("FileW", fileStyle, fileH, proc.File.TxRate(), func(s model.IOSample) float64 { return s.TxRateBps() })
+		}
+		sb.WriteString(dimStyle.Render(strings.Repeat("─", half-2)) + "\n")
+		sparkH++
+	}
+
+	// Connection table
+	connHeight := height - sparkH
 
 	header := headerStyle.Render(padR("FD", 5) + padR("Class", 8) + padR("Proto", 6) +
 		rxStyle.Render(padR("RX", 10)) + txStyle.Render(padR("TX", 10)) + "Endpoint")
-
-	var rows []string
-	rows = append(rows, header)
+	sb.WriteString(header + "\n")
+	connHeight--
 
 	start := 0
-	if m.connCursor > height-3 {
-		start = m.connCursor - (height - 3)
+	if m.connCursor > connHeight-2 {
+		start = m.connCursor - (connHeight - 2)
 	}
-
+	shown := 0
 	for i, c := range m.conns {
 		if i < start {
 			continue
 		}
-		if len(rows) >= height {
+		if shown >= connHeight-1 {
 			break
 		}
+		shown++
+
+		// Use resolved class for pre-BPF FDs if available.
+		cls := c.Class
+		if rc := c.ResolvedClass(); rc != model.FDClassUnknown {
+			cls = rc
+		}
+
 		info := c.Info()
 		proto := "-"
 		endpoint := "-"
@@ -376,18 +412,61 @@ func (m *AppModel) renderConnTable(height int) string {
 			}
 		}
 		row := fmt.Sprintf("%-5d%-8s%-6s%-10s%-10s%s",
-			c.FD, c.Class.String(), proto,
+			c.FD, cls.String(), proto,
 			formatRate(c.IO.RxRate()), formatRate(c.IO.TxRate()),
 			truncate(endpoint, half-39))
 
 		if i == m.connCursor && m.activePanel == panelConn {
-			rows = append(rows, selectedStyle.Render(row))
+			sb.WriteString(selectedStyle.Render(row) + "\n")
 		} else {
-			rows = append(rows, row)
+			sb.WriteString(row + "\n")
 		}
 	}
 
-	return strings.Join(rows, "\n")
+	return sb.String()
+}
+
+// sparkChars are the 8 block-element characters used for sparklines (▁ through █).
+var sparkChars = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+// renderSparkline renders a fixed-width ASCII sparkline from history samples.
+// history is in chronological order; the rightmost point is the most recent.
+func renderSparkline(history []model.IOSample, width int, getValue func(model.IOSample) float64) string {
+	if width <= 0 {
+		return ""
+	}
+	vals := make([]float64, len(history))
+	var max float64
+	for i, s := range history {
+		v := getValue(s)
+		vals[i] = v
+		if v > max {
+			max = v
+		}
+	}
+	// Keep only the most recent `width` samples.
+	if len(vals) > width {
+		vals = vals[len(vals)-width:]
+	}
+	// Left-pad with zeros so the sparkline always fills the full width.
+	if len(vals) < width {
+		padded := make([]float64, width)
+		copy(padded[width-len(vals):], vals)
+		vals = padded
+	}
+	var sb strings.Builder
+	for _, v := range vals {
+		if max == 0 {
+			sb.WriteRune(sparkChars[0])
+		} else {
+			idx := int(v/max*float64(len(sparkChars)-1) + 0.5)
+			if idx >= len(sparkChars) {
+				idx = len(sparkChars) - 1
+			}
+			sb.WriteRune(sparkChars[idx])
+		}
+	}
+	return sb.String()
 }
 
 func (m *AppModel) renderHelp() string {
