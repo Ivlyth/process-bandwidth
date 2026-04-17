@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pbmon – Process Bandwidth Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .rate-rx { color: #4ade80; }
+    .rate-tx { color: #f87171; }
+    .rate-fr { color: #fb923c; }
+    .rate-fw { color: #a78bfa; }
+    .selected-row { background: #1e293b; }
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Courier New', monospace; }
+    table { border-collapse: collapse; width: 100%; }
+    th { background: #1e293b; color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 12px; text-align: left; border-bottom: 1px solid #334155; }
+    td { padding: 6px 12px; border-bottom: 1px solid #1e293b; font-size: 0.85rem; white-space: nowrap; }
+    tr:hover td { background: #1e293b; cursor: pointer; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 700; }
+    .badge-net { background: #0f4c75; color: #93c5fd; }
+    .badge-file { background: #431407; color: #fdba74; }
+    .badge-pipe { background: #2d1b69; color: #c4b5fd; }
+    .badge-unknown { background: #1e293b; color: #64748b; }
+  </style>
+</head>
+<body x-data="pbmon()" x-init="init()" x-cloak>
+
+  <!-- Header -->
+  <div class="border-b border-slate-700 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <h1 class="text-lg font-bold text-emerald-400">pbmon</h1>
+      <span class="text-slate-500 text-sm">Process Bandwidth Monitor</span>
+    </div>
+    <div class="flex items-center gap-6 text-sm">
+      <span class="text-slate-400">Processes: <span class="text-white font-bold" x-text="overview.processes || 0"></span></span>
+      <span class="text-slate-400">Connections: <span class="text-white font-bold" x-text="overview.connections || 0"></span></span>
+      <span class="text-slate-400">Dropped: <span x-bind:class="(overview.dropped_events||0)>0?'text-red-400 font-bold':'text-white'" x-text="overview.dropped_events || 0"></span></span>
+      <span x-bind:class="connected ? 'text-emerald-400' : 'text-red-400'" class="text-xs" x-text="connected ? '● live' : '○ disconnected'"></span>
+    </div>
+  </div>
+
+  <!-- Overview rate bar -->
+  <div class="px-6 py-2 flex gap-6 text-sm border-b border-slate-800">
+    <span class="text-slate-500">System: </span>
+    <span>Net↓ <span class="rate-rx font-mono" x-text="fmt(overview.total_net_rx_bps||0)"></span></span>
+    <span>Net↑ <span class="rate-tx font-mono" x-text="fmt(overview.total_net_tx_bps||0)"></span></span>
+    <span>File R <span class="rate-fr font-mono" x-text="fmt(overview.total_file_rd_bps||0)"></span></span>
+    <span>File W <span class="rate-fw font-mono" x-text="fmt(overview.total_file_wr_bps||0)"></span></span>
+  </div>
+
+  <!-- Main layout -->
+  <div class="flex" style="height: calc(100vh - 100px)">
+
+    <!-- Left: Process table -->
+    <div class="flex-1 overflow-auto border-r border-slate-800">
+      <!-- Filter & sort bar -->
+      <div class="px-4 py-2 flex items-center gap-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+        <input
+          x-model="filter"
+          type="text"
+          placeholder="Filter by name…"
+          class="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-sm text-white placeholder-slate-500 w-48 focus:outline-none focus:border-emerald-500"
+        />
+        <select x-model="sortKey" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-white focus:outline-none">
+          <option value="net_rx_rate">Sort: Net↓</option>
+          <option value="net_tx_rate">Sort: Net↑</option>
+          <option value="file_rd_rate">Sort: File R</option>
+          <option value="file_wr_rate">Sort: File W</option>
+          <option value="pid">Sort: PID</option>
+          <option value="name">Sort: Name</option>
+        </select>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>PID</th>
+            <th>Name</th>
+            <th class="rate-rx">Net↓</th>
+            <th class="rate-tx">Net↑</th>
+            <th class="rate-fr">File R</th>
+            <th class="rate-fw">File W</th>
+            <th class="text-slate-500">Conns</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="p in filteredProcesses()" :key="p.pid">
+            <tr @click="selectProcess(p)" :class="selectedPID === p.pid ? 'selected-row' : ''">
+              <td class="text-slate-400 font-mono" x-text="p.pid"></td>
+              <td class="text-white font-semibold" x-text="p.name || '?'"></td>
+              <td class="rate-rx font-mono" x-text="fmt(p.net_rx_rate)"></td>
+              <td class="rate-tx font-mono" x-text="fmt(p.net_tx_rate)"></td>
+              <td class="rate-fr font-mono" x-text="fmt(p.file_rd_rate)"></td>
+              <td class="rate-fw font-mono" x-text="fmt(p.file_wr_rate)"></td>
+              <td class="text-slate-500 font-mono" x-text="p.connections"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Right: Detail panel -->
+    <div class="w-96 overflow-auto flex flex-col">
+      <!-- Bandwidth chart -->
+      <div class="p-4 border-b border-slate-800">
+        <p class="text-xs text-slate-500 mb-2">
+          <span x-text="selectedPID ? 'PID ' + selectedPID + ' – ' + (selectedName||'') : 'Select a process'"></span>
+        </p>
+        <canvas id="bwChart" height="120"></canvas>
+      </div>
+
+      <!-- Connection list -->
+      <div class="flex-1 overflow-auto p-4">
+        <template x-if="selectedConns.length === 0">
+          <p class="text-slate-600 text-sm text-center mt-8">No connections</p>
+        </template>
+        <template x-for="c in selectedConns" :key="c.fd">
+          <div class="mb-3 bg-slate-800 rounded p-3 text-xs">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-slate-400">fd <span class="text-white font-mono" x-text="c.fd"></span></span>
+              <span x-bind:class="badgeClass(c.class)" class="badge" x-text="c.class"></span>
+              <span class="text-slate-500 font-mono" x-text="c.protocol || '-'"></span>
+            </div>
+            <div class="text-slate-300 font-mono truncate" x-text="c.remote || c.local || '-'"></div>
+            <div class="flex gap-4 mt-1">
+              <span class="rate-rx" x-text="fmt(c.rx_rate) + '/s ↓'"></span>
+              <span class="rate-tx" x-text="fmt(c.tx_rate) + '/s ↑'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+<script>
+function pbmon() {
+  return {
+    connected: false,
+    ws: null,
+    processes: [],
+    overview: {},
+    filter: '',
+    sortKey: 'net_rx_rate',
+    selectedPID: null,
+    selectedName: '',
+    selectedConns: [],
+    chart: null,
+    chartLabels: [],
+    chartNetRx: [],
+    chartNetTx: [],
+    chartFileRd: [],
+    chartFileWr: [],
+
+    init() {
+      this.connect();
+      this.fetchOverview();
+      setInterval(() => this.fetchOverview(), 2000);
+      this.$nextTick(() => this.initChart());
+    },
+
+    connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      this.ws = new WebSocket(`${proto}://${location.host}/ws`);
+      this.ws.onopen = () => { this.connected = true; };
+      this.ws.onclose = () => {
+        this.connected = false;
+        setTimeout(() => this.connect(), 3000);
+      };
+      this.ws.onmessage = (e) => {
+        const snap = JSON.parse(e.data);
+        this.processes = snap.processes || [];
+        if (this.selectedPID) {
+          const p = this.processes.find(x => x.pid === this.selectedPID);
+          if (p) this.appendChartPoint(p);
+        }
+      };
+    },
+
+    fetchOverview() {
+      fetch('/api/overview')
+        .then(r => r.json())
+        .then(d => { this.overview = d; })
+        .catch(() => {});
+    },
+
+    filteredProcesses() {
+      let procs = this.processes;
+      if (this.filter) {
+        const f = this.filter.toLowerCase();
+        procs = procs.filter(p => (p.name||'').toLowerCase().includes(f));
+      }
+      return [...procs].sort((a, b) => {
+        if (this.sortKey === 'pid') return a.pid - b.pid;
+        if (this.sortKey === 'name') return (a.name||'').localeCompare(b.name||'');
+        return (b[this.sortKey]||0) - (a[this.sortKey]||0);
+      });
+    },
+
+    selectProcess(p) {
+      this.selectedPID = p.pid;
+      this.selectedName = p.name;
+      this.selectedConns = [];
+
+      // Load history for chart pre-population.
+      fetch(`/api/processes/${p.pid}`)
+        .then(r => r.json())
+        .then(d => {
+          const netRx  = d.net_rx_history  || [];
+          const netTx  = d.net_tx_history  || [];
+          const fileRd = d.file_rd_history || [];
+          const fileWr = d.file_wr_history || [];
+          const n = netRx.length;
+          this.chartLabels = Array.from({length: n}, (_, i) => `${i - n + 1}s`);
+          this.chartNetRx  = netRx;
+          this.chartNetTx  = netTx;
+          this.chartFileRd = fileRd;
+          this.chartFileWr = fileWr;
+          this._syncChart();
+        })
+        .catch(() => {
+          this.chartLabels = []; this.chartNetRx = []; this.chartNetTx = [];
+          this.chartFileRd = []; this.chartFileWr = [];
+          this._syncChart();
+        });
+
+      // Fetch connection list.
+      fetch(`/api/processes?conns=1`)
+        .then(r => r.json())
+        .then(procs => {
+          const found = procs.find(x => x.pid === p.pid);
+          this.selectedConns = found ? (found.connections || []) : [];
+        })
+        .catch(() => { this.selectedConns = []; });
+    },
+
+    initChart() {
+      const ctx = document.getElementById('bwChart');
+      if (!ctx) return;
+      this.chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: this.chartLabels,
+          datasets: [
+            { label: 'Net↓',   data: this.chartNetRx,  borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.08)',  borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'Net↑',   data: this.chartNetTx,  borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'File R', data: this.chartFileRd, borderColor: '#fb923c', backgroundColor: 'rgba(251,146,60,0.08)',  borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+            { label: 'File W', data: this.chartFileWr, borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,0.08)', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true },
+          ]
+        },
+        options: {
+          animation: false,
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { labels: { color: '#94a3b8', boxWidth: 12, font: { size: 11 } } },
+            tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${this.fmt(ctx.raw)}` } }
+          },
+          scales: {
+            x: { display: false },
+            y: { min: 0, ticks: { color: '#64748b', font: { size: 10 }, callback: v => this.fmt(v) }, grid: { color: '#1e293b' } }
+          }
+        }
+      });
+    },
+
+    // Append a single live data point from a WebSocket tick.
+    appendChartPoint(p) {
+      const now = new Date().toLocaleTimeString();
+      this.chartLabels.push(now);
+      this.chartNetRx.push(p.net_rx_rate  || 0);
+      this.chartNetTx.push(p.net_tx_rate  || 0);
+      this.chartFileRd.push(p.file_rd_rate || 0);
+      this.chartFileWr.push(p.file_wr_rate || 0);
+      const max = 60;
+      while (this.chartLabels.length > max) {
+        this.chartLabels.shift();
+        this.chartNetRx.shift();
+        this.chartNetTx.shift();
+        this.chartFileRd.shift();
+        this.chartFileWr.shift();
+      }
+      this._syncChart();
+    },
+
+    // Push current data arrays into Chart.js and redraw.
+    _syncChart() {
+      if (!this.chart) return;
+      this.chart.data.labels           = this.chartLabels;
+      this.chart.data.datasets[0].data = this.chartNetRx;
+      this.chart.data.datasets[1].data = this.chartNetTx;
+      this.chart.data.datasets[2].data = this.chartFileRd;
+      this.chart.data.datasets[3].data = this.chartFileWr;
+      this.chart.update('none');
+    },
+
+    fmt(bps) {
+      if (!bps || bps === 0) return '-';
+      if (bps >= 1e9) return (bps/1e9).toFixed(1) + ' GB/s';
+      if (bps >= 1e6) return (bps/1e6).toFixed(1) + ' MB/s';
+      if (bps >= 1e3) return (bps/1e3).toFixed(1) + ' KB/s';
+      return bps.toFixed(0) + ' B/s';
+    },
+
+    badgeClass(cls) {
+      const m = { socket: 'badge-net', file: 'badge-file', pipe: 'badge-pipe' };
+      return 'badge ' + (m[cls] || 'badge-unknown');
+    }
+  }
+}
+</script>
+</body>
+</html>
